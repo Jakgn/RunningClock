@@ -74,7 +74,7 @@ int main(void)
 			128 /* stack size */, NULL,
 			tskIDLE_PRIORITY + 1, pvLEDTask );
 
-	TimerHandle_t timer;	
+	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
 	timer = xTimerCreate("timer"/* Just a text name, not used by the RTOS kernel. */, 
 			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
 			pdTRUE, 1, /* The timers will auto-reload themselves when they expire. */ 
