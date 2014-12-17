@@ -105,7 +105,9 @@ OBJS += \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery.o \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_sdram.o \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_lcd.o \
-    $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_ioe.o
+    $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_ioe.o	\
+    $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_l3gd20.o
+
 
 # Traffic
 CFLAGS += -I $(PWD)/include

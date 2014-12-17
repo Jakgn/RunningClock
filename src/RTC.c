@@ -10,7 +10,7 @@ void RTC_Alarm_IRQHandler()
 	{
 		char *hello = "123world";                                                     
 		LCD_SetColors(LCD_COLOR_RED, LCD_COLOR_GREY);
-		        LCD_DisplayStringLine(LCD_LINE_6, hello);
+		LCD_DisplayStringLine(LCD_LINE_6, hello);
 
 		//vTaskSuspend( pvLEDTask );
 		RTC_ClearITPendingBit(RTC_IT_ALRA);

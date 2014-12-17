@@ -26,9 +26,11 @@
  */
 
 /* Includes ------------------------------------------------------------------*/
+#include <math.h>
 #include "FreeRTOSConfig.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 #include "RTC.h"
 #include "main.h"
 #include "stm32f4xx_conf.h"
@@ -38,10 +40,20 @@
 /* Private variables ---------------------------------------------------------*/
 static void LED_task(void *pvParameters);
 static void LCD_display_task(void *pvParameters);
+static void Gyroscope_Init(void);
+static void Gyroscope_Update(void);
+static void Gyroscope_Render(void);
+static void GyroscopeTask(void *pvParameters);
+static char* itoa(int value, char* result, int base);
+void vTimerCallback( TimerHandle_t pxTimer );
+void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
 void prvInit();
+
 char timeStr[];
 xTaskHandle *pvLEDTask;
+static float axes[3] = {0};
+static float time = 0.0f, frametime = 0.0f;
 
 int main(void)
 {
@@ -61,10 +73,127 @@ int main(void)
 			(signed portCHAR *) "LED Flash",
 			128 /* stack size */, NULL,
 			tskIDLE_PRIORITY + 1, pvLEDTask );
+
+	TimerHandle_t timer;	
+	timer = xTimerCreate("timer"/* Just a text name, not used by the RTOS kernel. */, 
+			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
+			pdTRUE, 1, /* The timers will auto-reload themselves when they expire. */ 
+			vTimerCallback /* Each timer calls the same callback when it expires. */);
+	if(timer == NULL) {
+	} else {
+		 if(xTimerStart(timer, 0) != pdPASS) {
+		 }
+	}
+
+	//SysTick_Config(SystemCoreClock / 100); // SysTick event each 10ms
+	xTaskCreate(GyroscopeTask, 
+			(char *) "Gyroscope", 
+			256, NULL, 
+			tskIDLE_PRIORITY + 1, NULL);
 	/* Start running the tasks. */
 	vTaskStartScheduler();
 	return 0;
 }
+
+void vTimerCallback( TimerHandle_t pxTimer ){
+	configASSERT( pxTimer );
+	time += 0.01f;
+}
+void OnSysTick(void)
+{
+	time += 0.01f;
+}
+
+static void Gyroscope_Init(void)
+{
+	L3GD20_InitTypeDef L3GD20_InitStructure;
+	L3GD20_InitStructure.Power_Mode = L3GD20_MODE_ACTIVE;
+	L3GD20_InitStructure.Output_DataRate = L3GD20_OUTPUT_DATARATE_1;
+	L3GD20_InitStructure.Axes_Enable = L3GD20_AXES_ENABLE;
+	L3GD20_InitStructure.Band_Width = L3GD20_BANDWIDTH_4;
+	L3GD20_InitStructure.BlockData_Update = L3GD20_BlockDataUpdate_Continous;
+	L3GD20_InitStructure.Endianness = L3GD20_BLE_LSB;
+	L3GD20_InitStructure.Full_Scale = L3GD20_FULLSCALE_250;
+	L3GD20_Init(&L3GD20_InitStructure);
+	L3GD20_FilterConfigTypeDef L3GD20_FilterStructure;
+	L3GD20_FilterStructure.HighPassFilter_Mode_Selection = L3GD20_HPM_NORMAL_MODE_RES;
+	L3GD20_FilterStructure.HighPassFilter_CutOff_Frequency = L3GD20_HPFCF_0;
+	L3GD20_FilterConfig(&L3GD20_FilterStructure);
+	L3GD20_FilterCmd(L3GD20_HIGHPASSFILTER_ENABLE);
+}
+
+static void Gyroscope_Update(void)
+{
+	uint8_t tmp[6] = {0};
+	int16_t a[3] = {0};
+	uint8_t tmpreg = 0;
+	L3GD20_Read(&tmpreg, L3GD20_CTRL_REG4_ADDR, 1);
+	L3GD20_Read(tmp, L3GD20_OUT_X_L_ADDR, 6);
+	/* check in the control register 4 the data alignment (Big Endian or Little Endian)*/
+	if (!(tmpreg & 0x40)) {
+		for (int i = 0; i < 3; i++)
+			a[i] = (int16_t)(((uint16_t)tmp[2 * i + 1] << 8) | (uint16_t)tmp[2 * i]);
+	} else {
+		for (int i = 0; i < 3; i++)
+			a[i] = (int16_t)(((uint16_t)tmp[2 * i] << 8) | (uint16_t)tmp[2 * i + 1]);
+	}
+	float delta = frametime - time;
+	frametime = time; // make frametime a consistent time value during the frames
+	for (int i = 0; i < 3; i++){
+		//axes[i] = a[i] / 114.285f;
+		axes[i] += (float)a[i] * delta / 114.285f;
+	}
+	if (axes[0] < 0) axes[0] = 0;
+	if (axes[0] > 180) axes[0] = 180;
+}
+static void Gyroscope_Render(void)
+{
+	LCD_ClearLine(LCD_LINE_1);
+	LCD_ClearLine(LCD_LINE_2);
+	LCD_ClearLine(LCD_LINE_3);
+	LCD_SetTextColor( LCD_COLOR_RED );
+	char str[16] = "X: ";
+	itoa(axes[0], str + 3, 10);
+	LCD_DisplayStringLine(LCD_LINE_1, str);
+	str[0] = 'Y';
+	itoa(axes[1], str + 3, 10);
+	LCD_DisplayStringLine(LCD_LINE_2, str);
+	str[0] = 'Z';
+	itoa(axes[2], str + 3, 10);
+	LCD_DisplayStringLine(LCD_LINE_3, str);
+}
+static void GyroscopeTask(void *pvParameters)
+{
+	Gyroscope_Init();
+	while(1){
+		Gyroscope_Update();
+		Gyroscope_Render();
+	}
+}
+
+static char* itoa(int value, char* result, int base)
+{
+	if (base < 2 || base > 36) {
+		*result = '\0';
+		return result;
+	}
+	char *ptr = result, *ptr1 = result, tmp_char;
+	int tmp_value;
+	do {
+		tmp_value = value;
+		value /= base;
+		*ptr++ = "zyxwvutsrqponmlkjihgfedcba9876543210123456789abcdefghijklmnopqrstuvwxyz" [35 + (tmp_value - value * base)];
+	} while (value);
+	if (tmp_value < 0) *ptr++ = '-';
+	*ptr-- = '\0';
+	while (ptr1 < ptr) {
+		tmp_char = *ptr;
+		*ptr-- = *ptr1;
+		*ptr1++ = tmp_char;
+	}
+	return result;
+}
+
 static void LCD_display_task(void *pvParameters)
 {
 	char *hello = "hello world";	
