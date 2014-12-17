@@ -45,20 +45,31 @@ static void Gyroscope_Update(void);
 static void Gyroscope_Render(void);
 static void GyroscopeTask(void *pvParameters);
 static char* itoa(int value, char* result, int base);
+static void usart_command(void *pvParameters);
+void RCC_Configuration(void);
+void GPIO_Configuration(void);
+void USART1_Configuration(void);
 void vTimerCallback( TimerHandle_t pxTimer );
 void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
 void prvInit();
+extern setting_time(uint8_t,uint8_t);
+extern set_alarm_time(uint8_t,uint8_t,char);
+void USART1_puts(char* s);
 
 char timeStr[];
 xTaskHandle *pvLEDTask;
 static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
+char CmdBuffer[100];
 
 int main(void)
 {
 	RTC_setting();
 	prvInit();
+	RCC_Configuration();
+    	GPIO_Configuration();
+    	USART1_Configuration();
 	/* Turn OFF all LEDs */
 	STM_EVAL_LEDOff(LED4);
 	STM_EVAL_LEDOff(LED3);
@@ -69,10 +80,15 @@ int main(void)
 			128 , NULL,
 			tskIDLE_PRIORITY + 1, NULL);
 	/* Create a task to flash the LED. */
-	xTaskCreate(LED_task,
+/*	xTaskCreate(LED_task,
 			(signed portCHAR *) "LED Flash",
+*/			128 /* stack size */, NULL,
+/*			tskIDLE_PRIORITY + 1, pvLEDTask );
+*/	/* Create a task to accept bluetooth. */
+	xTaskCreate(usart_command,
+			(signed portCHAR *) "usart blue tooth",
 			128 /* stack size */, NULL,
-			tskIDLE_PRIORITY + 1, pvLEDTask );
+			tskIDLE_PRIORITY + 1, NULL );
 
 	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
 	timer = xTimerCreate("timer"/* Just a text name, not used by the RTOS kernel. */, 
@@ -81,20 +97,110 @@ int main(void)
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
 	} else {
-		 if(xTimerStart(timer, 0) != pdPASS) {
+		 if(/*xTimerStart(timer, 0) != pdPASS*/1) {
 		 }
 	}
 
 	//SysTick_Config(SystemCoreClock / 100); // SysTick event each 10ms
-	xTaskCreate(GyroscopeTask, 
+/*	xTaskCreate(GyroscopeTask, 
 			(char *) "Gyroscope", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
-	/* Start running the tasks. */
+*/	/* Start running the tasks. */
 	vTaskStartScheduler();
 	return 0;
 }
 
+void USART1_puts(char* s)
+{
+    while(*s) {
+        while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+        USART_SendData(USART1, *s);
+        s++;
+    }
+}
+
+static void usart_command(void *pvParameters)
+{
+	int num = 0;
+	while(1)
+    	{
+        	while(USART_GetFlagStatus(USART1, USART_FLAG_RXNE) == RESET);
+        	char t = USART_ReceiveData(USART1);
+		if( t != '$')
+			CmdBuffer[num++] = t;
+		else
+		{
+			if(CmdBuffer[0]=='s' && CmdBuffer[1]=='e' && CmdBuffer[2]=='t')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				setting_time(hour,min);
+			}
+			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				set_alarm_time(hour,min,CmdBuffer[7]);
+			}
+			else
+			{
+				char msg[]="Error Command\0";
+				USART1_puts(msg);
+			}
+			
+			num = 0;
+		}
+        	if ((t == '\r')) {
+            	while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+            	USART_SendData(USART1, t);
+            	t = '\n';
+        	}
+        	while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+        	USART_SendData(USART1, t);
+    	}
+}
+void RCC_Configuration(void)
+{
+      /* --------------------------- System Clocks Configuration -----------------*/
+      /* USART1 clock enable */
+      RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+      /* GPIOA clock enable */
+      RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+}
+
+void GPIO_Configuration(void)
+{
+    GPIO_InitTypeDef GPIO_InitStructure;
+
+    /*-------------------------- GPIO Configuration ----------------------------*/
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+    /* Connect USART pins to AF */
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
+}
+ 
+/**************************************************************************************/
+ 
+void USART1_Configuration(void)
+{
+    USART_InitTypeDef USART_InitStructure;
+
+    USART_InitStructure.USART_BaudRate = 38400;
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART1, &USART_InitStructure);
+    USART_Cmd(USART1, ENABLE);
+}
 void vTimerCallback( TimerHandle_t pxTimer ){
 	configASSERT( pxTimer );
 	time += 0.01f;

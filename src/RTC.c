@@ -8,10 +8,9 @@ void RTC_Alarm_IRQHandler()
 {
 	if(RTC_GetITStatus(RTC_IT_ALRA) != RESET)
 	{
-		char *hello = "123world";                                                     
+		char *hello = "Alarm !!!!!!!!!";                                                     
 		LCD_SetColors(LCD_COLOR_RED, LCD_COLOR_GREY);
 		LCD_DisplayStringLine(LCD_LINE_6, hello);
-
 		//vTaskSuspend( pvLEDTask );
 		RTC_ClearITPendingBit(RTC_IT_ALRA);
 		EXTI_ClearITPendingBit(EXTI_Line17);
@@ -45,13 +44,13 @@ static void initialize_RTC(void)
 	RTC_InitStructure.RTC_HourFormat = RTC_HourFormat_24;
 	RTC_Init(&RTC_InitStructure);
 }
-static void setting_time(void)
+void setting_time(uint8_t hour,uint8_t min)
 {
 	/* set 8:29:55 */
 	RTC_TimeTypeDef RTC_TimeStruct;
-	RTC_TimeStruct.RTC_Hours = 0x08;
-	RTC_TimeStruct.RTC_Minutes = 0x29;
-	RTC_TimeStruct.RTC_Seconds = 0x55;
+	RTC_TimeStruct.RTC_Hours = hour;//BCD
+	RTC_TimeStruct.RTC_Minutes = min;//BCD
+	RTC_TimeStruct.RTC_Seconds = 0x00;
 	RTC_SetTime(RTC_Format_BCD, &RTC_TimeStruct);
 }
 static void setting_date(void)
@@ -82,14 +81,17 @@ static void initialize_RTC_alarm(void)
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
 }
-static void set_alarm_time(void)
+void set_alarm_time(uint8_t hour,uint8_t min,char AmOrPm)
 {
 	RTC_AlarmTypeDef RTC_AlarmStructure;
 	RTC_AlarmCmd(RTC_Alarm_A, DISABLE); /* disable before setting or cann't write */
 	/* set alarm time 8:30:0 everyday */
-	RTC_AlarmStructure.RTC_AlarmTime.RTC_H12 = RTC_H12_AM;
-	RTC_AlarmStructure.RTC_AlarmTime.RTC_Hours = 0x08;
-	RTC_AlarmStructure.RTC_AlarmTime.RTC_Minutes = 0x30;
+	if(AmOrPm == 'a')
+		RTC_AlarmStructure.RTC_AlarmTime.RTC_H12 = RTC_H12_AM;
+	else
+		RTC_AlarmStructure.RTC_AlarmTime.RTC_H12 = RTC_H12_PM;
+	RTC_AlarmStructure.RTC_AlarmTime.RTC_Hours = hour;
+	RTC_AlarmStructure.RTC_AlarmTime.RTC_Minutes = min;
 	RTC_AlarmStructure.RTC_AlarmTime.RTC_Seconds = 0x00;
 	RTC_AlarmStructure.RTC_AlarmDateWeekDay = 0x31; // Nonspecific
 	RTC_AlarmStructure.RTC_AlarmDateWeekDaySel = RTC_AlarmDateWeekDaySel_Date;
@@ -131,10 +133,10 @@ void enable_autowakeup_interrupt()
 void RTC_setting()
 {
 	initialize_RTC();
-	setting_time();
+	setting_time(0x08,0x55);
 	setting_date();
 	initialize_RTC_alarm();
-	set_alarm_time();
+	//set_alarm_time(0x08,0x50,'a');
 	//autowakeup_config();
 	//enable_autowakeup_interrupt();
 }
