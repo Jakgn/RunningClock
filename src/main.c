@@ -1,32 +1,15 @@
 /**
  ******************************************************************************
- * @file    Template/main.c 
- * @author  MCD Application Team
+ * @file    RunningClock/src/main.c 
+ * @author	embedded2014 Fall  
  * @version V1.0.0
- * @date    20-September-2013
+ * @date	2014 Fall 
  * @brief   Main program body
  ******************************************************************************
- * @attention
- *
- * <h2><center>&copy; COPYRIGHT 2013 STMicroelectronics</center></h2>
- *
- * Licensed under MCD-ST Liberty SW License Agreement V2, (the "License");
- * You may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *        http://www.st.com/software_license_agreement_liberty_v2
- *
- * Unless required by applicable law or agreed to in writing, software 
- * distributed under the License is distributed on an "AS IS" BASIS, 
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- ******************************************************************************
  */
-
 /* Includes ------------------------------------------------------------------*/
 #include <math.h>
+#include <string.h>
 #include "FreeRTOSConfig.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -52,12 +35,12 @@ void USART1_Configuration(void);
 void vTimerCallback( TimerHandle_t pxTimer );
 void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
-void prvInit();
-extern setting_time(uint8_t,uint8_t);
-extern set_alarm_time(uint8_t,uint8_t,char);
+void LCD_Configuration(void);
+//extern setting_time(uint8_t,uint8_t);
+//extern set_alarm_time(uint8_t,uint8_t,char);
 void USART1_puts(char* s);
 
-char timeStr[];
+char timeStr[10];
 xTaskHandle *pvLEDTask;
 static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
@@ -66,10 +49,13 @@ char CmdBuffer[100];
 int main(void)
 {
 	RTC_setting();
-	prvInit();
+	LCD_Configuration();
 	RCC_Configuration();
-    	GPIO_Configuration();
-    	USART1_Configuration();
+	GPIO_Configuration();
+ 	USART1_Configuration();
+
+	STM_EVAL_LEDInit(LED4);
+	STM_EVAL_LEDInit(LED3);
 	/* Turn OFF all LEDs */
 	STM_EVAL_LEDOff(LED4);
 	STM_EVAL_LEDOff(LED3);
@@ -86,14 +72,14 @@ int main(void)
 /*			tskIDLE_PRIORITY + 1, pvLEDTask );
 */	/* Create a task to accept bluetooth. */
 	xTaskCreate(usart_command,
-			(signed portCHAR *) "usart blue tooth",
+			(signed portCHAR *) "usart bluetooth",
 			128 /* stack size */, NULL,
 			tskIDLE_PRIORITY + 1, NULL );
 
 	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
-	timer = xTimerCreate("timer"/* Just a text name, not used by the RTOS kernel. */, 
+	timer = xTimerCreate("Timer for getting angle"/* Just a text name, not used by the RTOS kernel. */, 
 			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
-			pdTRUE, 1, /* The timers will auto-reload themselves when they expire. */ 
+			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
 	} else {
@@ -124,9 +110,9 @@ static void usart_command(void *pvParameters)
 {
 	int num = 0;
 	while(1)
-    	{
-        	while(USART_GetFlagStatus(USART1, USART_FLAG_RXNE) == RESET);
-        	char t = USART_ReceiveData(USART1);
+    {
+        while(USART_GetFlagStatus(USART1, USART_FLAG_RXNE) == RESET);
+        char t = USART_ReceiveData(USART1);
 		if( t != '$')
 			CmdBuffer[num++] = t;
 		else
@@ -136,29 +122,32 @@ static void usart_command(void *pvParameters)
 				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
 				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
 				setting_time(hour,min);
+				char msg[]="Set time success\0";
+				USART1_puts(msg);
 			}
 			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
 			{
 				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
 				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
 				set_alarm_time(hour,min,CmdBuffer[7]);
+				char msg[]="Set alarm time success\0";
+				USART1_puts(msg);
 			}
 			else
 			{
 				char msg[]="Error Command\0";
 				USART1_puts(msg);
 			}
-			
 			num = 0;
 		}
-        	if ((t == '\r')) {
-            	while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-            	USART_SendData(USART1, t);
-            	t = '\n';
-        	}
-        	while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-        	USART_SendData(USART1, t);
-    	}
+        if ((t == '\r')) {
+            while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+            USART_SendData(USART1, t);
+            t = '\n';
+        }
+        while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+        USART_SendData(USART1, t);
+    }
 }
 void RCC_Configuration(void)
 {
@@ -186,8 +175,6 @@ void GPIO_Configuration(void)
     GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
 }
  
-/**************************************************************************************/
- 
 void USART1_Configuration(void)
 {
     USART_InitTypeDef USART_InitStructure;
@@ -205,11 +192,6 @@ void vTimerCallback( TimerHandle_t pxTimer ){
 	configASSERT( pxTimer );
 	time += 0.01f;
 }
-void OnSysTick(void)
-{
-	time += 0.01f;
-}
-
 static void Gyroscope_Init(void)
 {
 	L3GD20_InitTypeDef L3GD20_InitStructure;
@@ -271,7 +253,7 @@ static void Gyroscope_Render(void)
 static void GyroscopeTask(void *pvParameters)
 {
 	Gyroscope_Init();
-	while(1){
+	while(1) {
 		Gyroscope_Update();
 		Gyroscope_Render();
 	}
@@ -343,7 +325,7 @@ static void LED_task(void *pvParameters)
 	}
 }
 
-void prvInit()
+void LCD_Configuration(void)
 {
 	//LCD init
 	LCD_Init();
@@ -358,9 +340,6 @@ void prvInit()
 	LCD_SetTransparency(0xFF);
 	LCD_Clear( LCD_COLOR_BLACK );
 	LCD_SetTextColor( LCD_COLOR_WHITE );
-
-	STM_EVAL_LEDInit(LED4);
-	STM_EVAL_LEDInit(LED3);
 }
 
 char * _8bitToStr(uint8_t time)	// Hexadecimal to Decimal'string 
