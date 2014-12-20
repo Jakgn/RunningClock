@@ -22,22 +22,20 @@
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 static void LED_task(void *pvParameters);
-static void LCD_display_task(void *pvParameters);
+static void LCD_display_Time_task(void *pvParameters);
 static void Gyroscope_Init(void);
 static void Gyroscope_Update(void);
 static void Gyroscope_Render(void);
 static void GyroscopeTask(void *pvParameters);
 static char* itoa(int value, char* result, int base);
-static void usart_command(void *pvParameters);
 void RCC_Configuration(void);
 void GPIO_Configuration(void);
 void USART1_Configuration(void);
+void USART1_IRQHandler(void);
 void vTimerCallback( TimerHandle_t pxTimer );
 void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
 void LCD_Configuration(void);
-//extern setting_time(uint8_t,uint8_t);
-//extern set_alarm_time(uint8_t,uint8_t,char);
 void USART1_puts(char* s);
 
 char timeStr[10];
@@ -45,6 +43,7 @@ xTaskHandle *pvLEDTask;
 static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
 char CmdBuffer[100];
+int num = 0;
 
 int main(void)
 {
@@ -60,22 +59,17 @@ int main(void)
 	STM_EVAL_LEDOff(LED4);
 	STM_EVAL_LEDOff(LED3);
 
-	/* Create a task to display something in the LCD. */
-	xTaskCreate(LCD_display_task,
+	/* Create a task to display Time in the LCD. */
+	xTaskCreate(LCD_display_Time_task,
 			(signed portCHAR *) "Liquid Crystal Display",
 			128 , NULL,
 			tskIDLE_PRIORITY + 1, NULL);
 	/* Create a task to flash the LED. */
-/*	xTaskCreate(LED_task,
+	xTaskCreate(LED_task,
 			(signed portCHAR *) "LED Flash",
-*/			128 /* stack size */, NULL,
-/*			tskIDLE_PRIORITY + 1, pvLEDTask );
-*/	/* Create a task to accept bluetooth. */
-	xTaskCreate(usart_command,
-			(signed portCHAR *) "usart bluetooth",
 			128 /* stack size */, NULL,
-			tskIDLE_PRIORITY + 1, NULL );
-
+			tskIDLE_PRIORITY + 1, pvLEDTask );
+	
 	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
 	timer = xTimerCreate("Timer for getting angle"/* Just a text name, not used by the RTOS kernel. */, 
 			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
@@ -83,16 +77,16 @@ int main(void)
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
 	} else {
-		 if(/*xTimerStart(timer, 0) != pdPASS*/1) {
+		 if(xTimerStart(timer, 0) != pdPASS) {
 		 }
 	}
 
 	//SysTick_Config(SystemCoreClock / 100); // SysTick event each 10ms
-/*	xTaskCreate(GyroscopeTask, 
+	xTaskCreate(GyroscopeTask, 
 			(char *) "Gyroscope", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
-*/	/* Start running the tasks. */
+	/* Start running the tasks. */
 	vTaskStartScheduler();
 	return 0;
 }
@@ -106,49 +100,6 @@ void USART1_puts(char* s)
     }
 }
 
-static void usart_command(void *pvParameters)
-{
-	int num = 0;
-	while(1)
-    {
-        while(USART_GetFlagStatus(USART1, USART_FLAG_RXNE) == RESET);
-        char t = USART_ReceiveData(USART1);
-		if( t != '$')
-			CmdBuffer[num++] = t;
-		else
-		{
-			if(CmdBuffer[0]=='s' && CmdBuffer[1]=='e' && CmdBuffer[2]=='t')
-			{
-				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
-				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
-				setting_time(hour,min);
-				char msg[]="Set time success\0";
-				USART1_puts(msg);
-			}
-			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
-			{
-				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
-				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
-				set_alarm_time(hour,min,CmdBuffer[7]);
-				char msg[]="Set alarm time success\0";
-				USART1_puts(msg);
-			}
-			else
-			{
-				char msg[]="Error Command\0";
-				USART1_puts(msg);
-			}
-			num = 0;
-		}
-        if ((t == '\r')) {
-            while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-            USART_SendData(USART1, t);
-            t = '\n';
-        }
-        while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-        USART_SendData(USART1, t);
-    }
-}
 void RCC_Configuration(void)
 {
       /* --------------------------- System Clocks Configuration -----------------*/
@@ -186,8 +137,57 @@ void USART1_Configuration(void)
     USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
     USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
     USART_Init(USART1, &USART_InitStructure);
+
+	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE); // enable USART1's receiver interrupt
+
+	NVIC_InitTypeDef NVIC_InitStructure;
+	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn; // Configure USART1 interrupt
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0; // Set the priority group of USART1 interrupt
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0; // Set the subpriority inside the group
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE; // Globally enable USART1 interrupt
+	NVIC_Init(&NVIC_InitStructure);	
+
     USART_Cmd(USART1, ENABLE);
 }
+
+/* USART1 interrupt be used to receive the bluetooth device */
+void USART1_IRQHandler(void)
+{
+	if( USART_GetITStatus(USART1, USART_IT_RXNE) ) {
+
+		char t = USART_ReceiveData(USART1);
+		if( t != '$')
+			CmdBuffer[num++] = t;
+		else
+		{
+			if(CmdBuffer[0]=='s' && CmdBuffer[1]=='e' && CmdBuffer[2]=='t')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				setting_time(hour,min);
+				char msg[]="Set time success\0";
+				USART1_puts(msg);
+			}
+			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				set_alarm_time(hour,min,CmdBuffer[7]);
+				char msg[]="Set alarm time success\0";
+				USART1_puts(msg);
+			}
+			else
+			{
+				char msg[]="Error Command";
+				USART1_puts(msg);
+			}
+			num = 0;
+		}
+        //while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		//USART_SendData( USART1, t ); // send back
+	}
+}
+
 void vTimerCallback( TimerHandle_t pxTimer ){
 	configASSERT( pxTimer );
 	time += 0.01f;
@@ -282,9 +282,8 @@ static char* itoa(int value, char* result, int base)
 	return result;
 }
 
-static void LCD_display_task(void *pvParameters)
+static void LCD_display_Time_task(void *pvParameters)
 {
-	char *hello = "hello world";	
 	char sec[3], min[3], hour[10], time[15];
 	LCD_SetColors(LCD_COLOR_RED, LCD_COLOR_GREY);
 	RTC_TimeTypeDef RTC_TimeStruct;
