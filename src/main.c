@@ -30,6 +30,7 @@ static void GyroscopeTask(void *pvParameters);
 static char* itoa(int value, char* result, int base);
 void RCC_Configuration(void);
 void GPIO_Configuration(void);
+void TIM_Configuration(void);
 void USART1_Configuration(void);
 void USART1_IRQHandler(void);
 void vTimerCallback( TimerHandle_t pxTimer );
@@ -37,6 +38,7 @@ void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
 void LCD_Configuration(void);
 void USART1_puts(char* s);
+static void Motor_PWM(void *pvParameters);
 
 char timeStr[10];
 xTaskHandle *pvLEDTask;
@@ -52,6 +54,7 @@ int main(void)
 	RCC_Configuration();
 	GPIO_Configuration();
  	USART1_Configuration();
+	TIM_Configuration();
 
 	STM_EVAL_LEDInit(LED4);
 	STM_EVAL_LEDInit(LED3);
@@ -60,16 +63,16 @@ int main(void)
 	STM_EVAL_LEDOff(LED3);
 
 	/* Create a task to display Time in the LCD. */
-	xTaskCreate(LCD_display_Time_task,
+/*	xTaskCreate(LCD_display_Time_task,
 			(signed portCHAR *) "Liquid Crystal Display",
 			128 , NULL,
 			tskIDLE_PRIORITY + 1, NULL);
-	/* Create a task to flash the LED. */
-	xTaskCreate(LED_task,
+*/	/* Create a task to flash the LED. */
+/*	xTaskCreate(LED_task,
 			(signed portCHAR *) "LED Flash",
-			128 /* stack size */, NULL,
+			128*/ /* stack size */ /*, NULL,
 			tskIDLE_PRIORITY + 1, pvLEDTask );
-	
+*/
 	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
 	timer = xTimerCreate("Timer for getting angle"/* Just a text name, not used by the RTOS kernel. */, 
 			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
@@ -77,16 +80,23 @@ int main(void)
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
 	} else {
-		 if(xTimerStart(timer, 0) != pdPASS) {
-		 }
+//		 if(xTimerStart(timer, 0) != pdPASS) {
+//		 }
 	}
 
 	//SysTick_Config(SystemCoreClock / 100); // SysTick event each 10ms
-	xTaskCreate(GyroscopeTask, 
+/*	xTaskCreate(GyroscopeTask,
 			(char *) "Gyroscope", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
+*/	/* Start running the tasks. */
+
+	xTaskCreate(Motor_PWM,
+			(char *) "Motor_PWM",
+			256, NULL,
+			tskIDLE_PRIORITY + 1, NULL);
 	/* Start running the tasks. */
+
 	vTaskStartScheduler();
 	return 0;
 }
@@ -102,11 +112,15 @@ void USART1_puts(char* s)
 
 void RCC_Configuration(void)
 {
-      /* --------------------------- System Clocks Configuration -----------------*/
-      /* USART1 clock enable */
-      RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
-      /* GPIOA clock enable */
-      RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+    /* --------------------------- System Clocks Configuration -----------------*/
+    /* USART1 clock enable */
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+    /* GPIOA clock enable */
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+
+	/* For Motor */
+	RCC_AHB1PeriphClockCmd( RCC_AHB1Periph_GPIOB , ENABLE );//Enalbe AHB for GPIOB
+	RCC_APB1PeriphClockCmd( RCC_APB1Periph_TIM4, ENABLE );//Enable APB for TIM4
 }
 
 void GPIO_Configuration(void)
@@ -124,8 +138,57 @@ void GPIO_Configuration(void)
     /* Connect USART pins to AF */
     GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
     GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
+
+	/* For Motor PWM */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource6, GPIO_AF_TIM4); // set GPIOB_Pin6 to AF_TIM4
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF; // Alt Function - Push Pull
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init( GPIOB, &GPIO_InitStructure );
+
 }
- 
+
+void TIM_Configuration(void)
+{
+	TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruct;
+	TIM_OCInitTypeDef TIM_OCInitStruct;
+	// Let PWM frequency equal 50Hz.
+	TIM_TimeBaseStructInit( &TIM_TimeBaseInitStruct );
+	TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV4;
+	TIM_TimeBaseInitStruct.TIM_Period = 1680 - 1; //84000000/1680*1000=50hz 20ms for cycle
+	TIM_TimeBaseInitStruct.TIM_Prescaler = 1000 - 1;
+	TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
+	TIM_TimeBaseInit( TIM4, &TIM_TimeBaseInitStruct );
+	TIM_OCStructInit( &TIM_OCInitStruct );
+	TIM_OCInitStruct.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OCInitStruct.TIM_OCMode = TIM_OCMode_PWM1;
+	// Initial duty cycle equals 0%. Value can range from zero to 65535.
+	//TIM_Pulse = TIM4_CCR1 register (16 bits)
+	TIM_OCInitStruct.TIM_Pulse = 0; //(0=Always Off, 65535=Always On)
+	TIM_OC1Init( TIM4, &TIM_OCInitStruct ); // Channel 1 LED
+	TIM_Cmd( TIM4, ENABLE );
+}
+
+static void Motor_PWM(void *pvParameters)
+{
+	volatile int i;
+
+	while(1) // Do not exit
+	{
+		STM_EVAL_LEDToggle(LED3);
+		TIM4->CCR1=42; //ang0 //pulse=42
+		for(i=0;i<10000000;i++);
+		STM_EVAL_LEDToggle(LED3);
+		//TIM4->CCR1=pulse+84; //ang90
+		TIM4->CCR1=840; //ang180
+		for(i=0;i<10000000;i++); // delay
+	}
+
+}
+
 void USART1_Configuration(void)
 {
     USART_InitTypeDef USART_InitStructure;

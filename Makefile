@@ -101,6 +101,7 @@ OBJS += \
     $(OUTDIR)/CORTEX_M4F_STM32F4/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rng.o \
     $(OUTDIR)/CORTEX_M4F_STM32F4/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rtc.o \
     $(OUTDIR)/CORTEX_M4F_STM32F4/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_pwr.o \
+    $(OUTDIR)/CORTEX_M4F_STM32F4/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_tim.o \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery.o \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_sdram.o \
     $(OUTDIR)/Utilities/STM32F429I-Discovery/stm32f429i_discovery_lcd.o \
