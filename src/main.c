@@ -39,6 +39,10 @@ char * _8bitToStr(uint8_t time);
 void LCD_Configuration(void);
 void USART1_puts(char* s);
 static void Motor_PWM(void *pvParameters);
+static void angle_print_on_PC(void *pvParameters);
+void PID_controller( TimerHandle_t pxTimer );
+void PID_init(void);
+void PWM_calculate(void);
 
 char timeStr[10];
 xTaskHandle *pvLEDTask;
@@ -46,7 +50,7 @@ static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
 char CmdBuffer[100];
 int num = 0;
-
+static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output;
 int main(void)
 {
 	RTC_setting();
@@ -55,7 +59,7 @@ int main(void)
 	GPIO_Configuration();
  	USART1_Configuration();
 	TIM_Configuration();
-
+	PID_init();
 	STM_EVAL_LEDInit(LED4);
 	STM_EVAL_LEDInit(LED3);
 	/* Turn OFF all LEDs */
@@ -80,25 +84,64 @@ int main(void)
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
 	} else {
-//		 if(xTimerStart(timer, 0) != pdPASS) {
-//		 }
+		 if(xTimerStart(timer, 0) != pdPASS) {
+		 }
 	}
 
-	//SysTick_Config(SystemCoreClock / 100); // SysTick event each 10ms
-/*	xTaskCreate(GyroscopeTask,
+	TimerHandle_t PID_timer; // exec the pid every times 
+	PID_timer = xTimerCreate("Timer for PID"/* Just a text name, not used by the RTOS kernel. */, 
+			50/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
+			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
+			PID_controller /* Each timer calls the function when it expires. */);
+	if(PID_timer == NULL) {
+	} else {
+		 if(xTimerStart(PID_timer, 0) != pdPASS) {
+		 }
+	}
+	
+	xTaskCreate(GyroscopeTask,
 			(char *) "Gyroscope", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
-*/	/* Start running the tasks. */
 
-	xTaskCreate(Motor_PWM,
+	xTaskCreate(angle_print_on_PC,
+			(char *) "angle_to_PC", 
+			256, NULL, 
+			tskIDLE_PRIORITY + 1, NULL);
+
+	/*xTaskCreate(Motor_PWM,
 			(char *) "Motor_PWM",
 			256, NULL,
-			tskIDLE_PRIORITY + 1, NULL);
+			tskIDLE_PRIORITY + 1, NULL);*/
 	/* Start running the tasks. */
 
 	vTaskStartScheduler();
 	return 0;
+}
+
+void PID_init(void)
+{
+	target = 0;
+	actual_error = 0;
+	previous_error = 0;
+	P = 0;
+	I = 0;
+	D = 0;
+	Kp = 50;
+	Ki = 10;
+	Kd = 1;
+
+}
+void PID_controller( TimerHandle_t pxTimer )
+{
+	previous_error = actual_error;
+	actual_error = target - axes[1];
+	P = actual_error;
+	I += previous_error;
+	D = actual_error - previous_error;
+	output = Kp * P + Ki * I + Kd * D;
+	PWM_calculate();
+
 }
 
 void USART1_puts(char* s)
@@ -110,6 +153,17 @@ void USART1_puts(char* s)
     }
 }
 
+static void angle_print_on_PC(void *pvParameters)
+{
+	char str[50];
+	while(1) {
+		itoa(axes[1]*1000, str, 10);
+		//itoa(output, str, 10);
+		strcat(str, "\n");	
+		
+		USART1_puts(str);
+    }
+}
 void RCC_Configuration(void)
 {
     /* --------------------------- System Clocks Configuration -----------------*/
@@ -126,7 +180,6 @@ void RCC_Configuration(void)
 void GPIO_Configuration(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;
-
     /*-------------------------- GPIO Configuration ----------------------------*/
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
@@ -148,30 +201,76 @@ void GPIO_Configuration(void)
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
 	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_Init( GPIOB, &GPIO_InitStructure );
-
+	/* For Motor PWM */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource7, GPIO_AF_TIM4); // set GPIOB_Pin6 to AF_TIM4
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_7;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF; // Alt Function - Push Pull
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init( GPIOB, &GPIO_InitStructure );
+	/* For Motor PWM */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource8, GPIO_AF_TIM4); // set GPIOB_Pin6 to AF_TIM4
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF; // Alt Function - Push Pull
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init( GPIOB, &GPIO_InitStructure );
+	/* For Motor PWM */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource9, GPIO_AF_TIM4); // set GPIOB_Pin6 to AF_TIM4
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF; // Alt Function - Push Pull
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init( GPIOB, &GPIO_InitStructure );
 }
 
 void TIM_Configuration(void)
 {
 	TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruct;
 	TIM_OCInitTypeDef TIM_OCInitStruct;
-	// Let PWM frequency equal 50Hz.
+	// Let PWM frequency equal XX Hz.
 	TIM_TimeBaseStructInit( &TIM_TimeBaseInitStruct );
 	TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV4;
-	TIM_TimeBaseInitStruct.TIM_Period = 1680 - 1; //84000000/1680*1000=50hz 20ms for cycle
+	TIM_TimeBaseInitStruct.TIM_Period = 200 - 1; //84000000/x*1000= XX hz ex:20ms for cycle
 	TIM_TimeBaseInitStruct.TIM_Prescaler = 1000 - 1;
 	TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
 	TIM_TimeBaseInit( TIM4, &TIM_TimeBaseInitStruct );
 	TIM_OCStructInit( &TIM_OCInitStruct );
 	TIM_OCInitStruct.TIM_OutputState = TIM_OutputState_Enable;
 	TIM_OCInitStruct.TIM_OCMode = TIM_OCMode_PWM1;
-	// Initial duty cycle equals 0%. Value can range from zero to 65535.
+	// Initial duty cycle equals 100%. Value can range from zero to 65535.
 	//TIM_Pulse = TIM4_CCR1 register (16 bits)
-	TIM_OCInitStruct.TIM_Pulse = 0; //(0=Always Off, 65535=Always On)
-	TIM_OC1Init( TIM4, &TIM_OCInitStruct ); // Channel 1 LED
+	TIM_OCInitStruct.TIM_Pulse = 65535; //(0=Always Off, 65535=Always On)
+	TIM_OC1Init( TIM4, &TIM_OCInitStruct ); // Channel 1
+	TIM_OC2Init( TIM4, &TIM_OCInitStruct ); // Channel 2
+	TIM_OC3Init( TIM4, &TIM_OCInitStruct ); // Channel 3
+	TIM_OC4Init( TIM4, &TIM_OCInitStruct ); // Channel 4
 	TIM_Cmd( TIM4, ENABLE );
 }
 
+void PWM_calculate(void)
+{
+	if( output > 0 )
+	{
+		TIM4->CCR3 = 0;
+		TIM4->CCR4 = 0;
+		TIM4->CCR1 = output;
+		TIM4->CCR2 = output;
+	}
+	else if( output <= 0 )
+	{
+		TIM4->CCR1 = 0;
+		TIM4->CCR2 = 0;
+		TIM4->CCR3 = -output;
+		TIM4->CCR4 = -output;
+	}
+}
 static void Motor_PWM(void *pvParameters)
 {
 	volatile int i;
@@ -179,11 +278,16 @@ static void Motor_PWM(void *pvParameters)
 	while(1) // Do not exit
 	{
 		STM_EVAL_LEDToggle(LED3);
-		TIM4->CCR1=42; //ang0 //pulse=42
+		TIM4->CCR1 = 32;
+		TIM4->CCR2 = 32;
+		TIM4->CCR3 = 0;
+		TIM4->CCR4 = 0;
 		for(i=0;i<10000000;i++);
 		STM_EVAL_LEDToggle(LED3);
-		//TIM4->CCR1=pulse+84; //ang90
-		TIM4->CCR1=840; //ang180
+		TIM4->CCR1 = 0;
+		TIM4->CCR2 = 0;
+		TIM4->CCR3 = 0;
+		TIM4->CCR4 = 0;
 		for(i=0;i<10000000;i++); // delay
 	}
 
@@ -294,8 +398,6 @@ static void Gyroscope_Update(void)
 		//axes[i] = a[i] / 114.285f;
 		axes[i] += (float)a[i] * delta / 114.285f;
 	}
-	if (axes[0] < 0) axes[0] = 0;
-	if (axes[0] > 180) axes[0] = 180;
 }
 static void Gyroscope_Render(void)
 {
