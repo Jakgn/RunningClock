@@ -41,6 +41,7 @@ void USART1_puts(char* s);
 static void Motor_PWM(void *pvParameters);
 static void angle_print_on_PC(void *pvParameters);
 void PID_controller( TimerHandle_t pxTimer );
+void cal_angle( TimerHandle_t pxTimer );
 void PID_init(void);
 void PWM_calculate(void);
 
@@ -50,15 +51,16 @@ static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
 char CmdBuffer[100];
 int num = 0;
-static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output;
+static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output, last_time = 0.0f;
 int main(void)
 {
 	RTC_setting();
 	LCD_Configuration();
 	RCC_Configuration();
 	GPIO_Configuration();
- 	USART1_Configuration();
+ //	USART1_Configuration();
 	TIM_Configuration();
+	Gyroscope_Init();
 	PID_init();
 	STM_EVAL_LEDInit(LED4);
 	STM_EVAL_LEDInit(LED3);
@@ -79,7 +81,7 @@ int main(void)
 */
 	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
 	timer = xTimerCreate("Timer for getting angle"/* Just a text name, not used by the RTOS kernel. */, 
-			10/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
+			5/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
 			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
 			vTimerCallback /* Each timer calls the same callback when it expires. */);
 	if(timer == NULL) {
@@ -88,9 +90,20 @@ int main(void)
 		 }
 	}
 
+	TimerHandle_t cal_angle_timer;
+	cal_angle_timer = xTimerCreate("Timer for cal_angle", 
+			10/portTICK_PERIOD_MS, 
+			pdTRUE, (void * const)1, 
+			cal_angle);
+	if(cal_angle_timer == NULL) {
+	} else {
+		 if(xTimerStart(cal_angle_timer, 0) != pdPASS) {
+		 }
+	}
+
 	TimerHandle_t PID_timer; // exec the pid every times 
 	PID_timer = xTimerCreate("Timer for PID"/* Just a text name, not used by the RTOS kernel. */, 
-			50/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
+			15/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
 			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
 			PID_controller /* Each timer calls the function when it expires. */);
 	if(PID_timer == NULL) {
@@ -98,12 +111,12 @@ int main(void)
 		 if(xTimerStart(PID_timer, 0) != pdPASS) {
 		 }
 	}
-	
-	xTaskCreate(GyroscopeTask,
+
+	/*xTaskCreate(GyroscopeTask,
 			(char *) "Gyroscope", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
-
+*/
 	xTaskCreate(angle_print_on_PC,
 			(char *) "angle_to_PC", 
 			256, NULL, 
@@ -127,21 +140,28 @@ void PID_init(void)
 	P = 0;
 	I = 0;
 	D = 0;
-	Kp = 50;
-	Ki = 10;
-	Kd = 1;
+	Kp = 60;
+	Ki = 50;
+	Kd = 0.001;
 
 }
 void PID_controller( TimerHandle_t pxTimer )
 {
+	float now = time;
+	float delta = now - last_time;
 	previous_error = actual_error;
 	actual_error = target - axes[1];
 	P = actual_error;
-	I += previous_error;
-	D = actual_error - previous_error;
+	I += actual_error * delta;
+	D = -(actual_error - previous_error) / delta;
 	output = Kp * P + Ki * I + Kd * D;
 	PWM_calculate();
+	last_time = now;
+}
 
+void cal_angle( TimerHandle_t pxTimer )
+{
+	Gyroscope_Update();
 }
 
 void USART1_puts(char* s)
@@ -157,8 +177,9 @@ static void angle_print_on_PC(void *pvParameters)
 {
 	char str[50];
 	while(1) {
-		itoa(axes[1]*1000, str, 10);
-		//itoa(output, str, 10);
+		//itoa((frametime - time)*1000, str, 10);
+		//itoa(axes[1]*1000, str, 10);
+		itoa(output, str, 10);
 		strcat(str, "\n");	
 		
 		USART1_puts(str);
@@ -181,16 +202,16 @@ void GPIO_Configuration(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;
     /*-------------------------- GPIO Configuration ----------------------------*/
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
+ /*   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
     GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
     GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
-
+*/
     /* Connect USART pins to AF */
-    GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
-    GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
+  //  GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
+  //  GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
 
 	/* For Motor PWM */
 	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
@@ -258,6 +279,8 @@ void PWM_calculate(void)
 {
 	if( output > 0 )
 	{
+		if(output > 197)
+			output = 197;
 		TIM4->CCR3 = 0;
 		TIM4->CCR4 = 0;
 		TIM4->CCR1 = output;
@@ -265,6 +288,8 @@ void PWM_calculate(void)
 	}
 	else if( output <= 0 )
 	{
+		if(output < -197)
+			output = -197;
 		TIM4->CCR1 = 0;
 		TIM4->CCR2 = 0;
 		TIM4->CCR3 = -output;
@@ -357,7 +382,7 @@ void USART1_IRQHandler(void)
 
 void vTimerCallback( TimerHandle_t pxTimer ){
 	configASSERT( pxTimer );
-	time += 0.01f;
+	time += 0.005f;
 }
 static void Gyroscope_Init(void)
 {
