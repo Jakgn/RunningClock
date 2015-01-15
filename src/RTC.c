@@ -16,6 +16,9 @@ void RTC_Alarm_IRQHandler()
 		EXTI_ClearITPendingBit(EXTI_Line17);
 		STM_EVAL_LEDOff(LED4);
 		STM_EVAL_LEDOff(LED3);
+
+		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData( USART1, '1' );
 	}
 }
 void RTC_WKUP_IRQHandler(void)

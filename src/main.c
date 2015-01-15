@@ -23,25 +23,23 @@
 /* Private variables ---------------------------------------------------------*/
 static void LED_task(void *pvParameters);
 static void LCD_display_Time_task(void *pvParameters);
-static void Gyroscope_Init(void);
-static void Gyroscope_Update(void);
-static void Gyroscope_Render(void);
-static void GyroscopeTask(void *pvParameters);
 static char* itoa(int value, char* result, int base);
 void RCC_Configuration(void);
 void GPIO_Configuration(void);
 void TIM_Configuration(void);
 void USART1_Configuration(void);
+void USART2_Configuration(void);
 void USART1_IRQHandler(void);
-void vTimerCallback( TimerHandle_t pxTimer );
+void USART2_IRQHandler(void);
 void OnSysTick(void);
 char * _8bitToStr(uint8_t time);
 void LCD_Configuration(void);
 void USART1_puts(char* s);
 static void Motor_PWM(void *pvParameters);
 static void angle_print_on_PC(void *pvParameters);
+static void buzzer(void *pvParameters);
 void PID_controller( TimerHandle_t pxTimer );
-void cal_angle( TimerHandle_t pxTimer );
+void Integral_to_Zero( TimerHandle_t pxTimer );
 void PID_init(void);
 void PWM_calculate(void);
 
@@ -52,15 +50,20 @@ static float time = 0.0f, frametime = 0.0f;
 char CmdBuffer[100];
 int num = 0;
 static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output, last_time = 0.0f;
+uint8_t angleData[11];
+uint8_t angleX[2];
+uint8_t angleCnt = 0;
+uint8_t angleFlag = 0;
+
 int main(void)
 {
 	RTC_setting();
 	LCD_Configuration();
 	RCC_Configuration();
 	GPIO_Configuration();
- //	USART1_Configuration();
+ 	USART1_Configuration();
+ 	USART2_Configuration();
 	TIM_Configuration();
-	Gyroscope_Init();
 	PID_init();
 	STM_EVAL_LEDInit(LED4);
 	STM_EVAL_LEDInit(LED3);
@@ -68,7 +71,7 @@ int main(void)
 	STM_EVAL_LEDOff(LED4);
 	STM_EVAL_LEDOff(LED3);
 
-	/* Create a task to display Time in the LCD. */
+    	/* Create a task to display Time in the LCD. */
 /*	xTaskCreate(LCD_display_Time_task,
 			(signed portCHAR *) "Liquid Crystal Display",
 			128 , NULL,
@@ -79,31 +82,10 @@ int main(void)
 			128*/ /* stack size */ /*, NULL,
 			tskIDLE_PRIORITY + 1, pvLEDTask );
 */
-	TimerHandle_t timer; // calculate the angle in gyroscope with angular velocity, it needs time
-	timer = xTimerCreate("Timer for getting angle"/* Just a text name, not used by the RTOS kernel. */, 
-			5/portTICK_PERIOD_MS/* 10ms, The timer period in ticks. */, 
-			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
-			vTimerCallback /* Each timer calls the same callback when it expires. */);
-	if(timer == NULL) {
-	} else {
-		 if(xTimerStart(timer, 0) != pdPASS) {
-		 }
-	}
-
-	TimerHandle_t cal_angle_timer;
-	cal_angle_timer = xTimerCreate("Timer for cal_angle", 
-			10/portTICK_PERIOD_MS, 
-			pdTRUE, (void * const)1, 
-			cal_angle);
-	if(cal_angle_timer == NULL) {
-	} else {
-		 if(xTimerStart(cal_angle_timer, 0) != pdPASS) {
-		 }
-	}
 
 	TimerHandle_t PID_timer; // exec the pid every times 
 	PID_timer = xTimerCreate("Timer for PID"/* Just a text name, not used by the RTOS kernel. */, 
-			15/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
+			7/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
 			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
 			PID_controller /* Each timer calls the function when it expires. */);
 	if(PID_timer == NULL) {
@@ -111,23 +93,33 @@ int main(void)
 		 if(xTimerStart(PID_timer, 0) != pdPASS) {
 		 }
 	}
+	
+	TimerHandle_t I_zero_timer; // exec the pid every times 
+	I_zero_timer = xTimerCreate("Timer for I to Zero"/* Just a text name, not used by the RTOS kernel. */, 
+			3000/portTICK_PERIOD_MS/* X ms, The timer period in ticks. */, 
+			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
+			Integral_to_Zero/* Each timer calls the function when it expires. */);
+	if(I_zero_timer == NULL) {
+	} else {
+		 if(xTimerStart(I_zero_timer, 0) != pdPASS) {
+		 }
+	}
 
-	/*xTaskCreate(GyroscopeTask,
-			(char *) "Gyroscope", 
-			256, NULL, 
-			tskIDLE_PRIORITY + 1, NULL);
-*/
 	xTaskCreate(angle_print_on_PC,
 			(char *) "angle_to_PC", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
 
+	/*xTaskCreate(buzzer,
+			(char *) "buzzer", 
+			256, NULL, 
+			tskIDLE_PRIORITY + 1, NULL);*/
 	/*xTaskCreate(Motor_PWM,
 			(char *) "Motor_PWM",
 			256, NULL,
 			tskIDLE_PRIORITY + 1, NULL);*/
 	/* Start running the tasks. */
-
+	
 	vTaskStartScheduler();
 	return 0;
 }
@@ -140,28 +132,33 @@ void PID_init(void)
 	P = 0;
 	I = 0;
 	D = 0;
-	Kp = 60;
-	Ki = 50;
-	Kd = 0.001;
-
+	Kp = 7;//7
+	Ki = 0.8;//1
+	Kd = 2;//0
 }
 void PID_controller( TimerHandle_t pxTimer )
 {
-	float now = time;
-	float delta = now - last_time;
+	//float now = time;
+	//float delta = now - last_time;
+	int16_t a[3] = {0};
+	a[0] = (int16_t)(((uint16_t)angleX[1] << 8) | (uint16_t)angleX[0]);
+	axes[0] = (float)a[0] / 131.0f;	
+	float delta = 0.015;
 	previous_error = actual_error;
-	actual_error = target - axes[1];
+	actual_error = target - axes[0];
 	P = actual_error;
-	I += actual_error * delta;
-	D = -(actual_error - previous_error) / delta;
+	I += actual_error;
+	D = -(actual_error - previous_error);
+	if( I > 197 ) I = 197;
+	else if( I < -197) I = -197;
 	output = Kp * P + Ki * I + Kd * D;
 	PWM_calculate();
-	last_time = now;
+	//last_time = now;
 }
 
-void cal_angle( TimerHandle_t pxTimer )
+void Integral_to_Zero( TimerHandle_t pxTimer )
 {
-	Gyroscope_Update();
+	I = 0;
 }
 
 void USART1_puts(char* s)
@@ -175,24 +172,35 @@ void USART1_puts(char* s)
 
 static void angle_print_on_PC(void *pvParameters)
 {
+
 	char str[50];
 	while(1) {
 		//itoa((frametime - time)*1000, str, 10);
 		//itoa(axes[1]*1000, str, 10);
-		itoa(output, str, 10);
-		strcat(str, "\n");	
+		itoa(axes[0]*100, str, 10);
+		//itoa(output, str, 10);
+		//itoa(I*100, str, 10);
+		strcat(str, "\r\n");	
 		
 		USART1_puts(str);
     }
 }
+
+static void buzzer(void *pvParameters)
+{
+	GPIO_SetBits(GPIOA, GPIO_Pin_6);
+	GPIO_ResetBits(GPIOA, GPIO_Pin_7);
+}
+
 void RCC_Configuration(void)
 {
     /* --------------------------- System Clocks Configuration -----------------*/
     /* USART1 clock enable */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+    /* USART2 clock enable */
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);
     /* GPIOA clock enable */
     RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
-
 	/* For Motor */
 	RCC_AHB1PeriphClockCmd( RCC_AHB1Periph_GPIOB , ENABLE );//Enalbe AHB for GPIOB
 	RCC_APB1PeriphClockCmd( RCC_APB1Periph_TIM4, ENABLE );//Enable APB for TIM4
@@ -201,17 +209,28 @@ void RCC_Configuration(void)
 void GPIO_Configuration(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;
-    /*-------------------------- GPIO Configuration ----------------------------*/
- /*   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
+    /* For USART1 */
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
     GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
     GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
-*/
-    /* Connect USART pins to AF */
-  //  GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
-  //  GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
+    /* Connect USART1 pins to AF */
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_USART1);   // USART1_TX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);  // USART1_RX
+	
+	/* For USART2 */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2 | GPIO_Pin_3;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    /* Connect USART2 pins to AF */
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource2, GPIO_AF_USART2);   // USART1_TX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource3, GPIO_AF_USART2);  // USART1_RX
 
 	/* For Motor PWM */
 	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
@@ -249,6 +268,14 @@ void GPIO_Configuration(void)
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
 	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_Init( GPIOB, &GPIO_InitStructure );
+	/* buzzer's use */	
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
 }
 
 void TIM_Configuration(void)
@@ -279,6 +306,7 @@ void PWM_calculate(void)
 {
 	if( output > 0 )
 	{
+		output += 8;
 		if(output > 197)
 			output = 197;
 		TIM4->CCR3 = 0;
@@ -286,8 +314,9 @@ void PWM_calculate(void)
 		TIM4->CCR1 = output;
 		TIM4->CCR2 = output;
 	}
-	else if( output <= 0 )
+	else if( output < 0 )
 	{
+		output -= 8;
 		if(output < -197)
 			output = -197;
 		TIM4->CCR1 = 0;
@@ -295,6 +324,7 @@ void PWM_calculate(void)
 		TIM4->CCR3 = -output;
 		TIM4->CCR4 = -output;
 	}
+	
 }
 static void Motor_PWM(void *pvParameters)
 {
@@ -303,8 +333,8 @@ static void Motor_PWM(void *pvParameters)
 	while(1) // Do not exit
 	{
 		STM_EVAL_LEDToggle(LED3);
-		TIM4->CCR1 = 32;
-		TIM4->CCR2 = 32;
+		TIM4->CCR1 = 100;
+		TIM4->CCR2 = 100;
 		TIM4->CCR3 = 0;
 		TIM4->CCR4 = 0;
 		for(i=0;i<10000000;i++);
@@ -331,7 +361,6 @@ void USART1_Configuration(void)
     USART_Init(USART1, &USART_InitStructure);
 
 	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE); // enable USART1's receiver interrupt
-
 	NVIC_InitTypeDef NVIC_InitStructure;
 	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn; // Configure USART1 interrupt
 	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0; // Set the priority group of USART1 interrupt
@@ -342,10 +371,33 @@ void USART1_Configuration(void)
     USART_Cmd(USART1, ENABLE);
 }
 
-/* USART1 interrupt be used to receive the bluetooth device */
+void USART2_Configuration(void)
+{
+    USART_InitTypeDef USART_InitStructure;
+
+    USART_InitStructure.USART_BaudRate = 115200;
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART2, &USART_InitStructure);
+
+	USART_ITConfig(USART2, USART_IT_RXNE, ENABLE); // enable USART2's receiver interrupt
+	NVIC_InitTypeDef NVIC_InitStructure;
+	NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn; // Configure USART2 interrupt
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0; // Set the priority group of USART2 interrupt
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0; // Set the subpriority inside the group
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE; // Globally enable USART2 interrupt
+	NVIC_Init(&NVIC_InitStructure);	
+
+    USART_Cmd(USART2, ENABLE);
+}
+
 void USART1_IRQHandler(void)
 {
-	if( USART_GetITStatus(USART1, USART_IT_RXNE) ) {
+	
+	/*if( USART_GetITStatus(USART1, USART_IT_RXNE) ) {
 
 		char t = USART_ReceiveData(USART1);
 		if( t != '$')
@@ -377,76 +429,30 @@ void USART1_IRQHandler(void)
 		}
         //while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 		//USART_SendData( USART1, t ); // send back
-	}
+	}*/
 }
 
-void vTimerCallback( TimerHandle_t pxTimer ){
-	configASSERT( pxTimer );
-	time += 0.005f;
-}
-static void Gyroscope_Init(void)
+void USART2_IRQHandler(void) // use to receive the angle from MPU-6050
 {
-	L3GD20_InitTypeDef L3GD20_InitStructure;
-	L3GD20_InitStructure.Power_Mode = L3GD20_MODE_ACTIVE;
-	L3GD20_InitStructure.Output_DataRate = L3GD20_OUTPUT_DATARATE_1;
-	L3GD20_InitStructure.Axes_Enable = L3GD20_AXES_ENABLE;
-	L3GD20_InitStructure.Band_Width = L3GD20_BANDWIDTH_4;
-	L3GD20_InitStructure.BlockData_Update = L3GD20_BlockDataUpdate_Continous;
-	L3GD20_InitStructure.Endianness = L3GD20_BLE_LSB;
-	L3GD20_InitStructure.Full_Scale = L3GD20_FULLSCALE_250;
-	L3GD20_Init(&L3GD20_InitStructure);
-	L3GD20_FilterConfigTypeDef L3GD20_FilterStructure;
-	L3GD20_FilterStructure.HighPassFilter_Mode_Selection = L3GD20_HPM_NORMAL_MODE_RES;
-	L3GD20_FilterStructure.HighPassFilter_CutOff_Frequency = L3GD20_HPFCF_0;
-	L3GD20_FilterConfig(&L3GD20_FilterStructure);
-	L3GD20_FilterCmd(L3GD20_HIGHPASSFILTER_ENABLE);
-}
+	angleCnt ++;
+	if( USART_GetITStatus(USART2, USART_IT_RXNE) ) {
+		char t = USART_ReceiveData(USART2);
+		if(t == 0x55 && angleFlag == 0) {
+			angleFlag = 1;
+			angleCnt = 0;
+		}
+		else if(t == 0x55 && angleCnt == 11) {
+			angleCnt = 0;
+			if(angleData[1] == 0x53) {
+				angleX[0] = angleData[4];
+				angleX[1] = angleData[5];
+			}
+		}
+		else if(angleFlag == 1){
+			angleData[angleCnt] = t;		
+		}
+	}
 
-static void Gyroscope_Update(void)
-{
-	uint8_t tmp[6] = {0};
-	int16_t a[3] = {0};
-	uint8_t tmpreg = 0;
-	L3GD20_Read(&tmpreg, L3GD20_CTRL_REG4_ADDR, 1);
-	L3GD20_Read(tmp, L3GD20_OUT_X_L_ADDR, 6);
-	/* check in the control register 4 the data alignment (Big Endian or Little Endian)*/
-	if (!(tmpreg & 0x40)) {
-		for (int i = 0; i < 3; i++)
-			a[i] = (int16_t)(((uint16_t)tmp[2 * i + 1] << 8) | (uint16_t)tmp[2 * i]);
-	} else {
-		for (int i = 0; i < 3; i++)
-			a[i] = (int16_t)(((uint16_t)tmp[2 * i] << 8) | (uint16_t)tmp[2 * i + 1]);
-	}
-	float delta = frametime - time;
-	frametime = time; // make frametime a consistent time value during the frames
-	for (int i = 0; i < 3; i++){
-		//axes[i] = a[i] / 114.285f;
-		axes[i] += (float)a[i] * delta / 114.285f;
-	}
-}
-static void Gyroscope_Render(void)
-{
-	LCD_ClearLine(LCD_LINE_1);
-	LCD_ClearLine(LCD_LINE_2);
-	LCD_ClearLine(LCD_LINE_3);
-	LCD_SetTextColor( LCD_COLOR_RED );
-	char str[16] = "X: ";
-	itoa(axes[0], str + 3, 10);
-	LCD_DisplayStringLine(LCD_LINE_1, str);
-	str[0] = 'Y';
-	itoa(axes[1], str + 3, 10);
-	LCD_DisplayStringLine(LCD_LINE_2, str);
-	str[0] = 'Z';
-	itoa(axes[2], str + 3, 10);
-	LCD_DisplayStringLine(LCD_LINE_3, str);
-}
-static void GyroscopeTask(void *pvParameters)
-{
-	Gyroscope_Init();
-	while(1) {
-		Gyroscope_Update();
-		Gyroscope_Render();
-	}
 }
 
 static char* itoa(int value, char* result, int base)
