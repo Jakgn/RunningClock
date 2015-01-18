@@ -37,10 +37,13 @@ void LCD_Configuration(void);
 void USART1_puts(char* s);
 static void Motor_PWM(void *pvParameters);
 static void angle_print_on_PC(void *pvParameters);
+static void user_button_press(void *pvParameters);
 static void buzzer(void *pvParameters);
 void PID_controller( TimerHandle_t pxTimer );
 void Integral_to_Zero( TimerHandle_t pxTimer );
-void PID_init(void);
+void cmd_check( TimerHandle_t pxTimer );
+void toggle_PID_state( TimerHandle_t pxTimer );
+void PID_init(float,float,float,float,float);
 void PWM_calculate(void);
 
 char timeStr[10];
@@ -49,11 +52,14 @@ static float axes[3] = {0};
 static float time = 0.0f, frametime = 0.0f;
 char CmdBuffer[100];
 int num = 0;
-static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output, last_time = 0.0f;
+static float actual_error, previous_error, P, I, D, Kp, Ki, Kd, target, output, jserv, last_time = 0.0f;
 uint8_t angleData[11];
 uint8_t angleX[2];
 uint8_t angleCnt = 0;
 uint8_t angleFlag = 0;
+int AT_mode = 0;
+int PID_state = 1;
+volatile int AT_cnt = 0;
 
 int main(void)
 {
@@ -64,7 +70,10 @@ int main(void)
  	USART1_Configuration();
  	USART2_Configuration();
 	TIM_Configuration();
-	PID_init();
+	//PID_init(-4,40,6,1,2);
+	//PID_init(0,0,0,0,0);
+	I = 0;
+	PID_init(0,0,7,0.8,2);
 	STM_EVAL_LEDInit(LED4);
 	STM_EVAL_LEDInit(LED3);
 	/* Turn OFF all LEDs */
@@ -104,9 +113,35 @@ int main(void)
 		 if(xTimerStart(I_zero_timer, 0) != pdPASS) {
 		 }
 	}
+	
+	TimerHandle_t cmd_check_timer; // exec the pid every times 
+	cmd_check_timer = xTimerCreate("Timer for check cmd"/* Just a text name, not used by the RTOS kernel. */, 
+			100/portTICK_PERIOD_MS/* X ms, The timer period in ticks. almost 0.3s */, 
+			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
+			cmd_check/* Each timer calls the function when it expires. */);
+	if(cmd_check_timer == NULL) {
+	} else {
+		 if(xTimerStart(cmd_check_timer, 0) != pdPASS) {
+		 }
+	}
 
-	xTaskCreate(angle_print_on_PC,
+	TimerHandle_t toggle_PID_state_timer; // exec the pid every times 
+	toggle_PID_state_timer = xTimerCreate("Timer for toggle PID"/* Just a text name, not used by the RTOS kernel. */, 
+			660/portTICK_PERIOD_MS/* X ms, The timer period in ticks. almost 0.3s */, 
+			pdTRUE, (void * const)1, /* The timers will auto-reload themselves when they expire. */ 
+			toggle_PID_state/* Each timer calls the function when it expires. */);
+	if(toggle_PID_state_timer == NULL) {
+	} else {
+		 if(/*xTimerStart(toggle_PID_state_timer, 0) != pdPASS*/1) {
+		 }
+	}
+	/*xTaskCreate(angle_print_on_PC,
 			(char *) "angle_to_PC", 
+			256, NULL, 
+			tskIDLE_PRIORITY + 1, NULL);
+*/
+	xTaskCreate(user_button_press,
+			(char *) "user btn pressed", 
 			256, NULL, 
 			tskIDLE_PRIORITY + 1, NULL);
 
@@ -120,21 +155,23 @@ int main(void)
 			tskIDLE_PRIORITY + 1, NULL);*/
 	/* Start running the tasks. */
 	
+	//GPIO_SetBits(GPIOA, GPIO_Pin_5);
 	vTaskStartScheduler();
 	return 0;
 }
 
-void PID_init(void)
+void PID_init(float Param_t,float Param_j,float Param_p, float Param_i, float Param_d)
 {
-	target = 0;
+	jserv = Param_j;
+	target = Param_t;
 	actual_error = 0;
 	previous_error = 0;
 	P = 0;
-	I = 0;
+	//I = 0;
 	D = 0;
-	Kp = 7;//7
-	Ki = 0.8;//1
-	Kd = 2;//0
+	Kp = Param_p;//7 //7
+	Ki = Param_i;//1 //0.8
+	Kd = Param_d;//0 //2
 }
 void PID_controller( TimerHandle_t pxTimer )
 {
@@ -151,7 +188,7 @@ void PID_controller( TimerHandle_t pxTimer )
 	D = -(actual_error - previous_error);
 	if( I > 197 ) I = 197;
 	else if( I < -197) I = -197;
-	output = Kp * P + Ki * I + Kd * D;
+	output = Kp * P + Ki * I + Kd * D + jserv;
 	PWM_calculate();
 	//last_time = now;
 }
@@ -190,6 +227,31 @@ static void buzzer(void *pvParameters)
 {
 	GPIO_SetBits(GPIOA, GPIO_Pin_6);
 	GPIO_ResetBits(GPIOA, GPIO_Pin_7);
+}
+
+static void user_button_press(void *pvParameters) // when pressed, buzzer close and bluetooth disconnect
+{
+	volatile int i;
+	while(1)
+	{
+		if(GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0) == Bit_SET) //User Button Pressed
+		{
+			GPIO_SetBits(GPIOA, GPIO_Pin_5); // bluetooth's KEY pin
+			while(GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0) == Bit_SET);	
+			AT_mode = 1;	
+			AT_cnt = 0;
+			USART1_puts("AT+DISC\r\n");
+			while(AT_cnt < 2);
+			USART1_puts("AT+ROLE=0\r\n");
+			while(AT_cnt < 4);
+			STM_EVAL_LEDToggle(LED3);
+			GPIO_SetBits(GPIOA, GPIO_Pin_7); // close buzzer
+			GPIO_ResetBits(GPIOA, GPIO_Pin_5); // bluetooth's KEY pin
+			PID_init(0,0,0,0,0);
+			AT_mode = 0;
+			AT_cnt = 0;
+		}
+	}
 }
 
 void RCC_Configuration(void)
@@ -268,13 +330,24 @@ void GPIO_Configuration(void)
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
 	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_Init( GPIOB, &GPIO_InitStructure );
-	/* buzzer's use */	
+	/* buzzer's use (6,7) and bluetooth's KEY pin (5) */	
 	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
 	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
 	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+	GPIO_ResetBits(GPIOA, GPIO_Pin_5); // bluetooth's KEY pin
+	GPIO_SetBits(GPIOA, GPIO_Pin_6); // for one motor's enable
+	GPIO_SetBits(GPIOA, GPIO_Pin_7); // for buzzer's black line
+	/* user button */
+	GPIO_StructInit(&GPIO_InitStructure); // Reset GPIO_structure
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_DOWN;
 	GPIO_Init(GPIOA, &GPIO_InitStructure);
 }
 
@@ -393,43 +466,23 @@ void USART2_Configuration(void)
 
     USART_Cmd(USART2, ENABLE);
 }
-
 void USART1_IRQHandler(void)
 {
 	
-	/*if( USART_GetITStatus(USART1, USART_IT_RXNE) ) {
+	if( USART_GetITStatus(USART1, USART_IT_RXNE) ) {
 
 		char t = USART_ReceiveData(USART1);
-		if( t != '$')
-			CmdBuffer[num++] = t;
-		else
+		if(AT_mode == 1)
 		{
-			if(CmdBuffer[0]=='s' && CmdBuffer[1]=='e' && CmdBuffer[2]=='t')
-			{
-				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
-				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
-				setting_time(hour,min);
-				char msg[]="Set time success\0";
-				USART1_puts(msg);
-			}
-			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
-			{
-				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
-				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
-				set_alarm_time(hour,min,CmdBuffer[7]);
-				char msg[]="Set alarm time success\0";
-				USART1_puts(msg);
-			}
-			else
-			{
-				char msg[]="Error Command";
-				USART1_puts(msg);
-			}
-			num = 0;
+			if(t == 'O' || t == 'K')
+				AT_cnt++;
+			return;
 		}
+		CmdBuffer[num++] = t;
+			//STM_EVAL_LEDToggle(LED4);
         //while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 		//USART_SendData( USART1, t ); // send back
-	}*/
+	}
 }
 
 void USART2_IRQHandler(void) // use to receive the angle from MPU-6050
@@ -454,6 +507,69 @@ void USART2_IRQHandler(void) // use to receive the angle from MPU-6050
 	}
 
 }
+
+void cmd_check( TimerHandle_t pxTimer )
+{
+	volatile int i;
+		if(CmdBuffer[num - 1] == '$') 
+		{
+			if(CmdBuffer[0]=='s' && CmdBuffer[1]=='e' && CmdBuffer[2]=='t')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				setting_time(hour,min);
+				char msg[]="Set time success\0";
+				USART1_puts(msg);
+			}
+			else if(CmdBuffer[0]=='a' && CmdBuffer[1]=='l' && CmdBuffer[2]=='a')
+			{
+				uint8_t hour = ((CmdBuffer[3]-'0')<<4) | (CmdBuffer[4]-'0');
+				uint8_t min = ((CmdBuffer[5]-'0')<<4) | (CmdBuffer[6]-'0');
+				set_alarm_time(hour,min);
+				char msg[]="Set alarm time success\0";
+				USART1_puts(msg);
+			}
+			else if(CmdBuffer[0]=='o' && CmdBuffer[1]=='k')
+			{
+				GPIO_SetBits(GPIOA, GPIO_Pin_5); // bluetooth's KEY pin	
+				for(i = 0; i < 1000000; i++);
+				AT_mode = 1;
+				AT_cnt = 0;
+				USART1_puts("AT+DISC\r\n"); 
+				//for(i = 0; i < 5000000; i++);
+				while(AT_cnt < 2);
+				STM_EVAL_LEDOn(LED3);
+				USART1_puts("AT+ROLE=1\r\n");
+				//for(i = 0; i < 5000000; i++);
+				while(AT_cnt < 4);
+				STM_EVAL_LEDOn(LED4);
+				USART1_puts("AT+LINK=98D3,31,801F21\r\n");
+				while(AT_cnt < 6);
+				STM_EVAL_LEDOn(LED4);
+				AT_cnt = 0;
+				AT_mode = 0;
+				GPIO_ResetBits(GPIOA, GPIO_Pin_5); // bluetooth's KEY pin	
+			}
+			else
+			{
+				char msg[]="Error Command";
+				USART1_puts(msg);
+			}
+			num = 0;
+		}
+}
+
+	
+void toggle_PID_state( TimerHandle_t pxTimer )
+{
+	PID_state ^= 1;
+
+	if(PID_state == 0)	
+		PID_init(0,0,7,0.8,2);
+	else
+		PID_init(-3,30,6,1,2);
+}
+	
 
 static char* itoa(int value, char* result, int base)
 {

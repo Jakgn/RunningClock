@@ -8,15 +8,17 @@ void RTC_Alarm_IRQHandler()
 {
 	if(RTC_GetITStatus(RTC_IT_ALRA) != RESET)
 	{
-		char *hello = "Alarm !!!!!!!!!";                                                     
+		/*char *hello = "Alarm !!!!!!!!!";                                                     
 		LCD_SetColors(LCD_COLOR_RED, LCD_COLOR_GREY);
-		LCD_DisplayStringLine(LCD_LINE_6, hello);
+		LCD_DisplayStringLine(LCD_LINE_6, hello);*/
 		//vTaskSuspend( pvLEDTask );
 		RTC_ClearITPendingBit(RTC_IT_ALRA);
 		EXTI_ClearITPendingBit(EXTI_Line17);
-		STM_EVAL_LEDOff(LED4);
-		STM_EVAL_LEDOff(LED3);
-
+		STM_EVAL_LEDOn(LED4);
+		STM_EVAL_LEDOn(LED3);
+		PID_init(0,0,7,0.8,2);
+		//PID_init(-3,35,6,1,2);
+		GPIO_ResetBits(GPIOA, GPIO_Pin_7); // buzzer's pin
 		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 		USART_SendData( USART1, '1' );
 	}
@@ -84,15 +86,11 @@ static void initialize_RTC_alarm(void)
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
 }
-void set_alarm_time(uint8_t hour,uint8_t min,char AmOrPm)
+void set_alarm_time(uint8_t hour,uint8_t min)
 {
 	RTC_AlarmTypeDef RTC_AlarmStructure;
 	RTC_AlarmCmd(RTC_Alarm_A, DISABLE); /* disable before setting or cann't write */
 	/* set alarm time 8:30:0 everyday */
-	if(AmOrPm == 'a')
-		RTC_AlarmStructure.RTC_AlarmTime.RTC_H12 = RTC_H12_AM;
-	else
-		RTC_AlarmStructure.RTC_AlarmTime.RTC_H12 = RTC_H12_PM;
 	RTC_AlarmStructure.RTC_AlarmTime.RTC_Hours = hour;
 	RTC_AlarmStructure.RTC_AlarmTime.RTC_Minutes = min;
 	RTC_AlarmStructure.RTC_AlarmTime.RTC_Seconds = 0x00;

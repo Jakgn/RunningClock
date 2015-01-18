@@ -35,6 +35,7 @@
 #include "stm32f429i_discovery_ioe.h"
 #include "stm32f429i_discovery_l3gd20.h"
 
+void PID_init(float,float,float,float,float);
 
 /* Exported types ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
